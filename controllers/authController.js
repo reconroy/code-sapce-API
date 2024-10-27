@@ -70,32 +70,41 @@ function getStoredOTP(email) {
     }
   };
   exports.login = async (req, res) => {
-    const { email, password } = req.body;
-  
     try {
-      // Find the user by email
-      const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-      
-      if (users.length === 0) {
-        return res.status(401).json({ message: 'Invalid email or password' });
+      const { emailOrUsername, password } = req.body;
+
+      if (!emailOrUsername || !password) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Please provide email/username and password',
+        });
       }
-  
-      const user = users[0];
-  
-      // Compare the provided password with the stored hash
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-  
-      if (!isPasswordValid) {
-        return res.status(401).json({ message: 'Invalid email or password' });
+
+      // Check if the input is an email or username
+      const isEmail = emailOrUsername.includes('@');
+      const query = isEmail
+        ? 'SELECT * FROM users WHERE email = ?'
+        : 'SELECT * FROM users WHERE username = ?';
+
+      const [users] = await pool.query(query, [emailOrUsername]);
+
+      if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Incorrect email/username or password',
+        });
       }
-  
-      // Generate a JWT token
-      const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  
-      res.json({ token, userId: user.id });
-    } catch (error) {
-      console.error('Login error:', error);
-      res.status(500).json({ message: 'An error occurred during login' });
+
+      const token = signToken(users[0].id);
+      res.status(200).json({
+        status: 'success',
+        token,
+      });
+    } catch (err) {
+      res.status(400).json({
+        status: 'fail',
+        message: err.message,
+      });
     }
   };
 exports.register = async (req, res) => {
@@ -158,30 +167,40 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { emailOrUsername, password } = req.body;
+    console.log('Login attempt:', { emailOrUsername, password: '****' });
 
-    if (!email || !password) {
+    if (!emailOrUsername || !password) {
       return res.status(400).json({
         status: 'fail',
-        message: 'Please provide email and password',
+        message: 'Please provide email/username and password',
       });
     }
 
-    const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    // Check if the input is an email or username
+    const isEmail = emailOrUsername.includes('@');
+    const query = isEmail
+      ? 'SELECT * FROM users WHERE email = ?'
+      : 'SELECT * FROM users WHERE username = ?';
+
+    const [users] = await pool.query(query, [emailOrUsername]);
+    console.log('Users found:', users.length);
 
     if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
       return res.status(401).json({
         status: 'fail',
-        message: 'Incorrect email or password',
+        message: 'Incorrect email/username or password',
       });
     }
 
     const token = signToken(users[0].id);
+    console.log('Login successful, token generated');
     res.status(200).json({
       status: 'success',
       token,
     });
   } catch (err) {
+    console.error('Login error:', err);
     res.status(400).json({
       status: 'fail',
       message: err.message,
