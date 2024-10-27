@@ -107,106 +107,206 @@ function getStoredOTP(email) {
       });
     }
   };
-exports.register = async (req, res) => {
-  console.log('Received registration request:', req.body);
-  try {
-    const { username, email, password } = req.body;
-
-    // Check if email already exists
-    const [existingUser] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-    if (existingUser.length > 0) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Email already exists',
-      });
-    }
-
-    // Check if username already exists
-    const [existingUsername] = await pool.query('SELECT * FROM users WHERE username = ?', [username]);
-    if (existingUsername.length > 0) {
-      return res.status(400).json({
-        status: 'fail', 
-        message: 'Username already exists',
-      });
-    }
-
-    // Validate password strength
-    if (password.length < 8) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Password must be at least 8 characters long',
-      });
-    }
-
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Insert the new user into the database
-    const [result] = await pool.query(
-      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, hashedPassword]
-    );
-
-    const token = signToken(result.insertId);
-
-    res.status(201).json({
-      status: 'success',
-      token,
-      data: {
-        user: { id: result.insertId, username, email },
-      },
-    });
-  } catch (err) {
-    console.error('Registration error:', err);
-    res.status(400).json({
-      status: 'fail',
-      message: err.message,
-    });
+  exports.register = async (req, res) => {
+    console.log('Received registration request:', req.body);
+    try {
+      const { username, email, password } = req.body;
+  
+      // Input validation
+      if (!username || !email || !password) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Please provide username, email, and password',
+        });
+      }
+  
+      // Validate username format
+      if (username.length < 3) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Username must be at least 3 characters long',
+        });
+      }
+  
+      const validUsernameRegex = /^[a-zA-Z0-9_-]+$/;
+      if (!validUsernameRegex.test(username)) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Username can only contain letters, numbers, underscores and hyphens',
+        });
+      }
+  
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Please provide a valid email address',
+        });
+      }
+  
+      // Start a transaction
+      const connection = await pool.getConnection();
+      await connection.beginTransaction();
+  
+      try {
+        // Check if email already exists
+        const [existingUser] = await connection.query('SELECT * FROM users WHERE email = ?', [email]);
+        if (existingUser.length > 0) {
+          await connection.rollback();
+          return res.status(400).json({
+            status: 'fail',
+            message: 'Email already exists',
+          });
+        }
+  
+        // Check if username already exists
+        const [existingUsername] = await connection.query('SELECT * FROM users WHERE username = ?', [username]);
+        if (existingUsername.length > 0) {
+          await connection.rollback();
+          return res.status(400).json({
+            status: 'fail',
+            message: 'Username already exists',
+          });
+        }
+  
+        // Validate password strength
+        if (password.length < 8) {
+          await connection.rollback();
+          return res.status(400).json({
+            status: 'fail',
+            message: 'Password must be at least 8 characters long',
+          });
+        }
+  
+        // Hash the password
+        const hashedPassword = await bcrypt.hash(password, 12);
+  
+        // Insert the new user
+        const [userResult] = await connection.query(
+          'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
+          [username, email, hashedPassword]
+        );
+  
+        // Create default private codespace for the user
+        const defaultContent = `// Welcome to your private CodeSpace, ${username}! 🚀
+  // This is your personal workspace where you can:
+  // - Write and test code
+  // - Save your snippets
+  // - Work on your projects
+  
+  function greeting() {
+    console.log("Welcome to CodeSpace!");
+    console.log("This is your private workspace.");
+    console.log("Happy coding! 🎉");
   }
-};
-
-exports.login = async (req, res) => {
-  try {
-    const { emailOrUsername, password } = req.body;
-    console.log('Login attempt:', { emailOrUsername, password: '****' });
-
-    if (!emailOrUsername || !password) {
-      return res.status(400).json({
+  
+  // Let's start coding!
+  greeting();`;
+  
+        // Insert the default codespace
+        await connection.query(
+          `INSERT INTO codespaces (
+            slug, 
+            owner_id, 
+            content, 
+            language, 
+            is_public, 
+            is_default, 
+            access_type
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            username,
+            userResult.insertId,
+            defaultContent,
+            'javascript',
+            false,
+            true,
+            'private'
+          ]
+        );
+  
+        // Update user's default_codespace_slug
+        await connection.query(
+          'UPDATE users SET default_codespace_slug = ? WHERE id = ?',
+          [username, userResult.insertId]
+        );
+  
+        // Commit the transaction
+        await connection.commit();
+  
+        // Generate JWT token
+        const token = signToken(userResult.insertId);
+  
+        // Send success response
+        res.status(201).json({
+          status: 'success',
+          token,
+          data: {
+            user: {
+              id: userResult.insertId,
+              username,
+              email,
+              default_codespace: username
+            },
+          },
+        });
+      } catch (err) {
+        await connection.rollback();
+        console.error('Transaction error:', err);
+        throw new Error('Registration failed. Please try again.');
+      } finally {
+        connection.release();
+      }
+    } catch (err) {
+      console.error('Registration error:', err);
+      res.status(400).json({
         status: 'fail',
-        message: 'Please provide email/username and password',
+        message: err.message || 'Registration failed. Please try again.',
       });
     }
+  };
 
-    // Check if the input is an email or username
-    const isEmail = emailOrUsername.includes('@');
-    const query = isEmail
-      ? 'SELECT * FROM users WHERE email = ?'
-      : 'SELECT * FROM users WHERE username = ?';
-
-    const [users] = await pool.query(query, [emailOrUsername]);
-    console.log('Users found:', users.length);
-
-    if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
-      return res.status(401).json({
+  exports.login = async (req, res) => {
+    try {
+      const { emailOrUsername, password } = req.body;
+  
+      if (!emailOrUsername || !password) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Please provide email/username and password',
+        });
+      }
+  
+      // Check if the input is an email or username
+      const isEmail = emailOrUsername.includes('@');
+      const query = isEmail
+        ? 'SELECT * FROM users WHERE email = ?'
+        : 'SELECT * FROM users WHERE username = ?';
+  
+      const [users] = await pool.query(query, [emailOrUsername]);
+  
+      if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Incorrect email/username or password',
+        });
+      }
+  
+      const token = signToken(users[0].id);
+      res.status(200).json({
+        status: 'success',
+        token,
+        username: users[0].username  // Include username in response
+      });
+    } catch (err) {
+      console.error('Login error:', err);
+      res.status(400).json({
         status: 'fail',
-        message: 'Incorrect email/username or password',
+        message: err.message,
       });
     }
-
-    const token = signToken(users[0].id);
-    console.log('Login successful, token generated');
-    res.status(200).json({
-      status: 'success',
-      token,
-    });
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(400).json({
-      status: 'fail',
-      message: err.message,
-    });
-  }
-};
+  };
 exports.resetPassword = async (req, res) => {
     const { email, newPassword } = req.body;
   

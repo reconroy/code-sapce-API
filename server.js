@@ -157,3 +157,82 @@ app.get('*', (req, res) => {
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+// ... existing code ...
+
+app.get('/api/codespace/:slug', async (req, res) => {
+  const { slug } = req.params;
+  let userId = null;
+
+  // Get user ID if token exists
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.id;
+    }
+  } catch (error) {
+    // Invalid token, continue as guest
+  }
+
+  try {
+    // Get codespace with owner information
+    const [codespaces] = await pool.query(
+      `SELECT c.*, u.username as owner_username 
+       FROM codespaces c 
+       JOIN users u ON c.owner_id = u.id 
+       WHERE c.slug = ?`,
+      [slug]
+    );
+
+    if (codespaces.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    const codespace = codespaces[0];
+
+    // Check access permissions
+    if (codespace.access_type === 'private' || codespace.is_default) {
+      // Check if user is the owner
+      if (codespace.owner_id !== userId) {
+        // Check if user has explicit access
+        if (userId) {
+          const [access] = await pool.query(
+            'SELECT * FROM codespace_access WHERE codespace_id = ? AND user_id = ?',
+            [codespace.id, userId]
+          );
+          
+          if (access.length === 0) {
+            return res.status(403).json({
+              status: 'fail',
+              message: 'Access denied',
+              owner: codespace.owner_username
+            });
+          }
+        } else {
+          // Guest user, no access
+          return res.status(403).json({
+            status: 'fail',
+            message: 'Access denied',
+            owner: codespace.owner_username
+          });
+        }
+      }
+    }
+
+    // User has access, return codespace data
+    res.json({
+      status: 'success',
+      data: codespace
+    });
+  } catch (error) {
+    console.error('Error fetching codespace:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error'
+    });
+  }
+});
