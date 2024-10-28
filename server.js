@@ -7,6 +7,7 @@ const diffRoute = require('./routes/diffRoute');
 const authController = require('./controllers/authController');
 const pool = require('./config/database');
 const authMiddleware = require('./middleware/authMiddleware');
+const codespaceRoutes = require('./routes/codespace');
 require('dotenv').config();
 
 const app = express();
@@ -41,6 +42,9 @@ app.post('/api/reset-password', authController.resetPassword);
 app.post('/api/change-password', authMiddleware, authController.changePassword);
 
 app.use('/api/diff', diffRoute);
+
+// Add the codespace routes
+app.use('/api/codespace', codespaceRoutes);
 
 io.on('connection', (socket) => {
   console.log('New client connected');
