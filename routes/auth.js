@@ -17,4 +17,9 @@ router.get('/verify', authController.verifyToken);
 // When frontend makes GET request to /api/auth/verify
 // Used to check if user's token is still valid
 
+// 4. User Logout
+router.post('/logout', authController.logout);
+// When frontend makes POST request to /api/auth/logout
+// Used to invalidate user's token
+
 module.exports = router;
