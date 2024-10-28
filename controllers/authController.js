@@ -191,7 +191,7 @@ exports.register = async (req, res) => {
 
       // Create user
       const [userResult] = await connection.query(
-        'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
+        "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
         [username, email, hashedPassword]
       );
 
@@ -447,21 +447,90 @@ exports.changePassword = async (req, res) => {
       .json({ message: "An error occurred while changing the password" });
   }
 };
+// Add this to your verifyToken function to check blacklist
+
+exports.logout = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    console.log("Auth header:", authHeader); // Debug log
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      console.log("No valid auth header found"); // Debug log
+      return res.status(401).json({
+        status: "fail",
+        message: "No token provided",
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+    console.log("Token to blacklist:", token); // Debug log
+
+    try {
+      // Add current timestamp log
+      console.log("Current timestamp:", new Date());
+
+      const [result] = await pool.query(
+        "INSERT INTO token_blacklist (token, expires_at) VALUES (?, ?)",
+        [token, new Date(Date.now() + 24 * 60 * 60 * 1000)]
+      );
+
+      console.log("Database insert result:", result); // Debug log
+
+      if (result.affectedRows > 0) {
+        // Query to verify the insertion
+        const [verification] = await pool.query(
+          "SELECT * FROM token_blacklist WHERE token = ?",
+          [token]
+        );
+        console.log("Verification query result:", verification);
+
+        res.status(200).json({
+          status: "success",
+          message: "Logged out successfully",
+        });
+      } else {
+        throw new Error("Failed to insert token into blacklist");
+      }
+    } catch (dbError) {
+      console.error("Database error details:", dbError);
+      throw new Error(`Failed to blacklist token: ${dbError.message}`);
+    }
+  } catch (error) {
+    console.error("Full logout error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "An error occurred during logout",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 exports.verifyToken = async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.json({ valid: false });
     }
 
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Check if user still exists in database
-    const [users] = await pool.query(
-      'SELECT id FROM users WHERE id = ?',
-      [decoded.id]
+    const token = authHeader.split(" ")[1];
+
+    // Check if token is blacklisted
+    const [blacklistedTokens] = await pool.query(
+      "SELECT * FROM token_blacklist WHERE token = ? AND expires_at > NOW()",
+      [token]
     );
+
+    if (blacklistedTokens.length > 0) {
+      return res.json({ valid: false });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Check if user still exists
+    const [users] = await pool.query("SELECT id FROM users WHERE id = ?", [
+      decoded.id,
+    ]);
 
     if (users.length === 0) {
       return res.json({ valid: false });
@@ -469,7 +538,7 @@ exports.verifyToken = async (req, res) => {
 
     res.json({ valid: true });
   } catch (error) {
-    console.error('Token verification error:', error);
+    console.error("Token verification error:", error);
     res.json({ valid: false });
   }
 };
