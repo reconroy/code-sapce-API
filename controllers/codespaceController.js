@@ -3,56 +3,143 @@ const pool = require('../config/database');
 
 // Add the getCodespace function that was missing
 exports.getCodespace = async (req, res) => {
-  const { slug } = req.params;
-  let userId = null;
-
-  try {
-    // Get user ID from token if exists
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      userId = decoded.id;
-    }
-
-    // Get codespace with owner information
-    const [codespaces] = await pool.query(
-      `SELECT c.*, u.username as owner_username 
-       FROM codespaces c 
-       LEFT JOIN users u ON c.owner_id = u.id 
-       WHERE c.slug = ?`,
-      [slug]
-    );
-
-    if (codespaces.length === 0) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Codespace not found'
-      });
-    }
-
-    const codespace = codespaces[0];
-
-    // Only check access for default/private codespaces
-    if (codespace.is_default) {
-      if (codespace.owner_id !== userId) {
-        return res.status(403).json({
+    const { slug } = req.params;
+    let userId = null;
+  
+    try {
+      // Get codespace with owner information first
+      const [codespaces] = await pool.query(
+        `SELECT c.*, u.username as owner_username 
+         FROM codespaces c 
+         LEFT JOIN users u ON c.owner_id = u.id 
+         WHERE c.slug = ?`,
+        [slug]
+      );
+  
+      if (codespaces.length === 0) {
+        return res.status(404).json({
           status: 'fail',
-          message: 'Access denied',
-          owner: codespace.owner_username
+          message: 'Codespace not found'
         });
       }
+  
+      const codespace = codespaces[0];
+  
+      // If access_type is private, verify token and ownership immediately
+      if (codespace.access_type === 'private') {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+          return res.status(403).json({
+            status: 'fail',
+            message: 'Access denied',
+            owner: codespace.owner_username
+          });
+        }
+  
+        try {
+          const token = authHeader.split(' ')[1];
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          userId = decoded.id;
+  
+          if (codespace.owner_id !== userId) {
+            return res.status(403).json({
+              status: 'fail',
+              message: 'Access denied',
+              owner: codespace.owner_username
+            });
+          }
+        } catch (error) {
+          return res.status(403).json({
+            status: 'fail',
+            message: 'Access denied',
+            owner: codespace.owner_username
+          });
+        }
+      }
+  
+      // If we get here, it's either public or verified private access
+      res.json({
+        ...codespace,
+        isPrivate: codespace.access_type === 'private', // Change this to use access_type
+        owner_username: codespace.owner_username
+      });
+    } catch (error) {
+      console.error('Error fetching codespace:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Server error'
+      });
     }
-
-    res.json(codespace);
-  } catch (error) {
-    console.error('Error fetching codespace:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error'
-    });
-  }
-};
+  };
+  
+  exports.updateCodespace = async (req, res) => {
+    try {
+      const { slug } = req.params;
+      const { content, language } = req.body;
+  
+      // Get codespace details first
+      const [codespace] = await pool.query(
+        'SELECT owner_id, access_type FROM codespaces WHERE slug = ?',
+        [slug]
+      );
+  
+      if (codespace.length === 0) {
+        return res.status(404).json({
+          status: 'fail',
+          message: 'Codespace not found'
+        });
+      }
+  
+      // For public codespaces, allow updates without token
+      if (codespace[0].access_type === 'public') {
+        await pool.query(
+          'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
+          [content, language, slug]
+        );
+        return res.json({
+          status: 'success',
+          message: 'Codespace updated successfully'
+        });
+      }
+  
+      // For private codespaces, verify token and ownership
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) {
+        return res.status(401).json({
+          status: 'fail',
+          reason: 'unauthorized',
+          message: 'Authentication required'
+        });
+      }
+  
+      // Verify ownership for private codespaces
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (codespace[0].owner_id !== decoded.id) {
+        return res.status(403).json({
+          status: 'fail',
+          reason: 'unauthorized',
+          message: 'You do not have permission to edit this private codespace'
+        });
+      }
+  
+      // Update codespace
+      await pool.query(
+        'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
+        [content, language, slug]
+      );
+  
+      res.json({
+        status: 'success',
+        message: 'Codespace updated successfully'
+      });
+    } catch (error) {
+      console.error('Update codespace error:', error);
+      res.status(500).json({
+        status: 'fail',
+        message: 'Failed to update codespace'
+      });
+    }
+  };
 
 exports.createCodespace = async (req, res) => {
     try {
@@ -122,6 +209,75 @@ exports.createCodespace = async (req, res) => {
       res.status(500).json({
         status: 'error',
         message: 'Failed to create codespace'
+      });
+    }
+  };
+
+  exports.updateCodespace = async (req, res) => {
+    try {
+      const { slug } = req.params;
+      const { content, language } = req.body;
+  
+      // Get codespace details first
+      const [codespace] = await pool.query(
+        'SELECT owner_id, is_private FROM codespaces WHERE slug = ?',
+        [slug]
+      );
+  
+      if (codespace.length === 0) {
+        return res.status(404).json({
+          status: 'fail',
+          message: 'Codespace not found'
+        });
+      }
+  
+      // For public codespaces, allow updates without token
+      if (!codespace[0].is_private) {
+        await pool.query(
+          'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
+          [content, language, slug]
+        );
+        return res.json({
+          status: 'success',
+          message: 'Codespace updated successfully'
+        });
+      }
+  
+      // For private codespaces, verify token and ownership
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) {
+        return res.status(401).json({
+          status: 'fail',
+          reason: 'unauthorized',
+          message: 'Authentication required'
+        });
+      }
+  
+      // Verify ownership for private codespaces
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (codespace[0].owner_id !== decoded.id) {
+        return res.status(403).json({
+          status: 'fail',
+          reason: 'unauthorized',
+          message: 'You do not have permission to edit this private codespace'
+        });
+      }
+  
+      // Update codespace
+      await pool.query(
+        'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
+        [content, language, slug]
+      );
+  
+      res.json({
+        status: 'success',
+        message: 'Codespace updated successfully'
+      });
+    } catch (error) {
+      console.error('Update codespace error:', error);
+      res.status(500).json({
+        status: 'fail',
+        message: 'Failed to update codespace'
       });
     }
   };
