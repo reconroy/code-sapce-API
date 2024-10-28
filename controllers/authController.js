@@ -447,3 +447,29 @@ exports.changePassword = async (req, res) => {
       .json({ message: "An error occurred while changing the password" });
   }
 };
+exports.verifyToken = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.json({ valid: false });
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check if user still exists in database
+    const [users] = await pool.query(
+      'SELECT id FROM users WHERE id = ?',
+      [decoded.id]
+    );
+
+    if (users.length === 0) {
+      return res.json({ valid: false });
+    }
+
+    res.json({ valid: true });
+  } catch (error) {
+    console.error('Token verification error:', error);
+    res.json({ valid: false });
+  }
+};
