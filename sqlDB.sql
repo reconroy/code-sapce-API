@@ -5,14 +5,18 @@ CREATE DATABASE IF NOT EXISTS codespaces;
 USE codespaces;
 
 -- Create the users table
+
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) NOT NULL UNIQUE,
     email VARCHAR(100) NOT NULL UNIQUE,
     password VARCHAR(255) NOT NULL,
+    default_codespace_slug VARCHAR(50),  -- Added this line
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+-- ... existing code ...
 
 -- Create the user_auth table
 CREATE TABLE IF NOT EXISTS user_auth (
@@ -31,10 +35,13 @@ CREATE TABLE IF NOT EXISTS codespaces (
     content TEXT,
     language VARCHAR(50),
     is_public BOOLEAN DEFAULT FALSE,
+    is_default BOOLEAN DEFAULT FALSE,    -- Added this line
+    access_type VARCHAR(20) DEFAULT 'private',  -- Added this line
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
 );
+
 
 -- Add indexes for better query performance
 CREATE INDEX idx_users_username ON users(username);
