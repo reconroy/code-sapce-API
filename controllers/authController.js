@@ -153,10 +153,10 @@ exports.register = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create user
+    // Create user with default_codespace_slug
     const [userResult] = await connection.query(
-      "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-      [username, email, hashedPassword]
+      "INSERT INTO users (username, email, password, default_codespace_slug) VALUES (?, ?, ?, ?)",
+      [username, email, hashedPassword, username] // Store username as default_codespace_slug
     );
 
     // Create default codespace
@@ -187,7 +187,6 @@ exports.register = async (req, res) => {
 
     const token = signToken(userResult.insertId);
 
-    // Send success response with all necessary data
     res.status(201).json({
       status: "success",
       token,
@@ -196,7 +195,7 @@ exports.register = async (req, res) => {
           id: userResult.insertId,
           username,
           email,
-          default_codespace: username
+          default_codespace_slug: username // Match the database column name
         }
       }
     });
@@ -204,7 +203,10 @@ exports.register = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error("Registration error:", err);
-    throw new Error("Registration failed. Please try again.");
+    res.status(400).json({
+      status: "fail",
+      message: err.message || "Registration failed. Please try again."
+    });
   } finally {
     connection.release();
   }
