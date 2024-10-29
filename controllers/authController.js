@@ -318,33 +318,44 @@ exports.login = async (req, res) => {
   }
 };
 exports.resetPassword = async (req, res) => {
-  const { email, newPassword } = req.body;
-
   try {
-    // Find the user by email
-    const [users] = await pool.query("SELECT * FROM users WHERE email = ?", [
-      email,
-    ]);
+    const { email, newPassword } = req.body;
 
-    if (users.length === 0) {
-      return res.status(404).json({ message: "User not found" });
+    // Validate input
+    if (!email || !newPassword) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email and new password are required'
+      });
     }
 
     // Hash the new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
 
-    // Update the user's password in the database
-    await pool.query("UPDATE users SET password = ? WHERE email = ?", [
-      hashedPassword,
-      email,
-    ]);
+    // Update the password in database
+    const [result] = await pool.query(
+      'UPDATE users SET password = ? WHERE email = ?',
+      [hashedPassword, email]
+    );
 
-    res.json({ message: "Password reset successfully" });
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password reset successful'
+    });
+
   } catch (error) {
-    console.error("Error resetting password:", error);
-    res
-      .status(500)
-      .json({ message: "An error occurred while resetting the password" });
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to reset password'
+    });
   }
 };
 exports.checkUsername = async (req, res) => {
@@ -540,5 +551,22 @@ exports.verifyToken = async (req, res) => {
   } catch (error) {
     console.error("Token verification error:", error);
     res.json({ valid: false });
+  }
+};
+// Add this new endpoint to check if email exists
+exports.checkEmailExists = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const [users] = await pool.query("SELECT * FROM users WHERE email = ?", [
+      email,
+    ]);
+
+    res.json({ exists: users.length > 0 });
+  } catch (err) {
+    console.error("Email check error:", err);
+    res.status(500).json({
+      status: "error",
+      message: "An error occurred while checking email",
+    });
   }
 };

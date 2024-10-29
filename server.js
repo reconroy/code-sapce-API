@@ -16,38 +16,30 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
     methods: ["GET", "POST"]
   }
 });
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 const port = process.env.PORT || 5000;
 
-app.post('/api/login', authController.login);
-// Handle user registration
-app.post('/api/register', authController.register);
-
-// Check if username is available
-app.get('/api/check-username/:username', authController.checkUsername);
-
-// Check if email is available
-app.get('/api/check-email/:email', authController.checkEmail);
-
-// Handle OTP
-app.post('/api/send-otp', authController.sendOTP);
-app.post('/api/verify-otp', authController.verifyOTP);
-
-// Handle password reset
-app.post('/api/reset-password', authController.resetPassword);
-app.post('/api/change-password', authMiddleware, authController.changePassword);
-
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/codespace', codespaceRoutes);
 app.use('/api/diff', diffRoute);
 
-// Add the codespace routes
-app.use('/api/codespace', codespaceRoutes);
-app.use('/api/auth', authRoutes);
+// Auth endpoints
+app.post('/api/login', authController.login);
+app.post('/api/register', authController.register);
+app.get('/api/check-username/:username', authController.checkUsername);
+app.get('/api/check-email/:email', authController.checkEmail);
+app.post('/api/send-otp', authController.sendOTP);
+app.post('/api/verify-otp', authController.verifyOTP);
+app.post('/api/reset-password', authController.resetPassword);
+app.post('/api/change-password', authMiddleware, authController.changePassword);
 
 io.on('connection', (socket) => {
   console.log('New client connected');
@@ -164,7 +156,6 @@ app.get('*', (req, res) => {
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-// ... existing code ...
 
 app.get('/api/codespace/:slug', async (req, res) => {
   const { slug } = req.params;

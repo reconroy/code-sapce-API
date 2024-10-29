@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const authMiddleware = require('../middleware/authMiddleware');
 const codespaceController = require('../controllers/codespaceController');
 
-// Make sure these controller functions exist
-router.get('/:slug', codespaceController.getCodespace);
-router.post('/', codespaceController.createCodespace);
+// Protected routes
+router.get('/:slug', authMiddleware, codespaceController.getCodespace);
+router.put('/:slug', authMiddleware, codespaceController.updateCodespace);
 
 module.exports = router;
