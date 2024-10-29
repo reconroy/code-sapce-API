@@ -2,24 +2,23 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
 
-// 1. User Registration
-router.post('/register', authController.register);
-// When frontend makes POST request to /api/auth/register
-// Used for creating new user accounts
-
-// 2. User Login
+// Authentication routes
 router.post('/login', authController.login);
-// When frontend makes POST request to /api/auth/login
-// Used for authenticating existing users
-
-// 3. Token Verification
-router.get('/verify', authController.verifyToken);
-// When frontend makes GET request to /api/auth/verify
-// Used to check if user's token is still valid
-
-// 4. User Logout
+router.post('/register', authController.register);
 router.post('/logout', authController.logout);
-// When frontend makes POST request to /api/auth/logout
-// Used to invalidate user's token
+router.get('/verify', authController.verifyToken);
+
+// Email and username verification routes
+router.get('/check-username/:username', authController.checkUsername);
+router.get('/check-email/:email', authController.checkEmailExists);
+router.get('/check-email-exists/:email', authController.checkEmailExists);
+
+// OTP routes
+router.post('/send-otp', authController.sendOTP);
+router.post('/verify-otp', authController.verifyOTP);
+
+// Password management routes
+router.post('/reset-password', authController.resetPassword);
+router.post('/change-password', authController.changePassword);
 
 module.exports = router;

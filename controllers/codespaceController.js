@@ -4,7 +4,7 @@ const pool = require('../config/database');
 // Add the getCodespace function that was missing
 exports.getCodespace = async (req, res) => {
     const { slug } = req.params;
-    let userId = null;
+    const userId = req.user.id; // From auth middleware
   
     try {
       // Get codespace with owner information first
@@ -25,46 +25,32 @@ exports.getCodespace = async (req, res) => {
   
       const codespace = codespaces[0];
   
-      // If access_type is private, verify token and ownership immediately
+      // Check access permissions
       if (codespace.access_type === 'private') {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-          return res.status(403).json({
-            status: 'fail',
-            message: 'Access denied',
-            owner: codespace.owner_username
-          });
-        }
-  
-        try {
-          const token = authHeader.split(' ')[1];
-          const decoded = jwt.verify(token, process.env.JWT_SECRET);
-          userId = decoded.id;
-  
-          if (codespace.owner_id !== userId) {
+        // Check if user is the owner
+        if (codespace.owner_id !== userId) {
+          // Check if user has explicit access
+          const [access] = await pool.query(
+            'SELECT * FROM codespace_access WHERE codespace_id = ? AND user_id = ?',
+            [codespace.id, userId]
+          );
+          
+          if (access.length === 0) {
             return res.status(403).json({
               status: 'fail',
               message: 'Access denied',
               owner: codespace.owner_username
             });
           }
-        } catch (error) {
-          return res.status(403).json({
-            status: 'fail',
-            message: 'Access denied',
-            owner: codespace.owner_username
-          });
         }
       }
   
-      // If we get here, it's either public or verified private access
       res.json({
-        ...codespace,
-        isPrivate: codespace.access_type === 'private', // Change this to use access_type
-        owner_username: codespace.owner_username
+        status: 'success',
+        data: codespace
       });
     } catch (error) {
-      console.error('Error fetching codespace:', error);
+      console.error('Error in getCodespace:', error);
       res.status(500).json({
         status: 'error',
         message: 'Server error'
