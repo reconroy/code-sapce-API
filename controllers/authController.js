@@ -113,7 +113,7 @@ exports.login = async (req, res) => {
 exports.register = async (req, res) => {
   const connection = await pool.getConnection();
   await connection.beginTransaction();
-  console.log("Received registration request:", req.body);
+  
   try {
     const { username, email, password } = req.body;
 
@@ -151,172 +151,65 @@ exports.register = async (req, res) => {
       });
     }
 
-    try {
-      // Check if email already exists
-      const [existingUser] = await connection.query(
-        "SELECT * FROM users WHERE email = ?",
-        [email]
-      );
-      if (existingUser.length > 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          status: "fail",
-          message: "Email already exists",
-        });
-      }
+    const hashedPassword = await bcrypt.hash(password, 12);
 
-      // Check if username already exists
-      const [existingUsername] = await connection.query(
-        "SELECT * FROM users WHERE username = ?",
-        [username]
-      );
-      if (existingUsername.length > 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          status: "fail",
-          message: "Username already exists",
-        });
-      }
+    // Create user
+    const [userResult] = await connection.query(
+      "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+      [username, email, hashedPassword]
+    );
 
-      // Validate password strength
-      if (password.length < 8) {
-        await connection.rollback();
-        return res.status(400).json({
-          status: "fail",
-          message: "Password must be at least 8 characters long",
-        });
-      }
+    // Create default codespace
+    const defaultContent = `// Welcome to your private CodeSpace, ${username}! 🚀\n// This is your personal workspace where you can:\n// - Write and test code\n// - Save your snippets\n// - Work on your projects\n\nfunction greeting() {\n  console.log("Welcome to CodeSpace!");\n  console.log("This is your private workspace.");\n  console.log("Happy coding! 🎉");\n}\n\n// Let's start coding!\ngreeting();`;
 
-      const hashedPassword = await bcrypt.hash(password, 12);
+    await connection.query(
+      `INSERT INTO codespaces (
+        slug, 
+        owner_id, 
+        content, 
+        language, 
+        is_public, 
+        is_default, 
+        access_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        username,
+        userResult.insertId,
+        defaultContent,
+        'javascript',
+        false,
+        true,
+        'private'
+      ]
+    );
 
-      // Create user
-      const [userResult] = await connection.query(
-        "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-        [username, email, hashedPassword]
-      );
+    await connection.commit();
 
-      // Create default private codespace for the user
-      const defaultContent = `// Welcome to your private CodeSpace, ${username}! 🚀
-// This is your personal workspace where you can:
-// - Write and test code
-// - Save your snippets
-// - Work on your projects
+    const token = signToken(userResult.insertId);
 
-function greeting() {
-  console.log("Welcome to CodeSpace!");
-  console.log("This is your private workspace.");
-  console.log("Happy coding! 🎉");
-}
-
-// Let's start coding!
-greeting();`;
-
-      // Insert the default codespace
-      await connection.query(
-        `INSERT INTO codespaces (
-          slug, 
-          owner_id, 
-          content, 
-          language, 
-          is_public, 
-          is_default, 
-          access_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          username, // slug is username
-          userResult.insertId, // owner_id
-          defaultContent,
-          "javascript",
-          false, // not public
-          true, // is default
-          "private", // private access
-        ]
-      );
-
-      // Update user's default_codespace_slug
-      await connection.query(
-        "UPDATE users SET default_codespace_slug = ? WHERE id = ?",
-        [username, userResult.insertId]
-      );
-
-      // Commit the transaction
-      await connection.commit();
-
-      // Generate JWT token
-      const token = signToken(userResult.insertId);
-
-      // Send success response
-      res.status(201).json({
-        status: "success",
-        token,
-        data: {
-          user: {
-            id: userResult.insertId,
-            username,
-            email,
-            default_codespace: username,
-          },
-        },
-      });
-    } catch (err) {
-      await connection.rollback();
-      console.error("Transaction error:", err);
-      throw new Error("Registration failed. Please try again.");
-    } finally {
-      connection.release();
-    }
-  } catch (err) {
-    console.error("Registration error:", err);
-    res.status(400).json({
-      status: "fail",
-      message: err.message || "Registration failed. Please try again.",
-    });
-  }
-};
-
-exports.login = async (req, res) => {
-  try {
-    const { emailOrUsername, password } = req.body;
-
-    if (!emailOrUsername || !password) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Please provide email/username and password",
-      });
-    }
-
-    // Check if the input is an email or username
-    const isEmail = emailOrUsername.includes("@");
-    const query = isEmail
-      ? "SELECT * FROM users WHERE email = ?"
-      : "SELECT * FROM users WHERE username = ?";
-
-    const [users] = await pool.query(query, [emailOrUsername]);
-
-    if (
-      users.length === 0 ||
-      !(await bcrypt.compare(password, users[0].password))
-    ) {
-      return res.status(401).json({
-        status: "fail",
-        message: "Incorrect email/username or password",
-      });
-    }
-
-    const token = signToken(users[0].id);
-    res.status(200).json({
+    // Send success response with all necessary data
+    res.status(201).json({
       status: "success",
       token,
-      username: users[0].username, // Include username in response
+      data: {
+        user: {
+          id: userResult.insertId,
+          username,
+          email,
+          default_codespace: username
+        }
+      }
     });
+
   } catch (err) {
-    console.error("Login error:", err);
-    res.status(400).json({
-      status: "fail",
-      message: err.message,
-    });
+    await connection.rollback();
+    console.error("Registration error:", err);
+    throw new Error("Registration failed. Please try again.");
+  } finally {
+    connection.release();
   }
 };
+
 exports.resetPassword = async (req, res) => {
   try {
     const { email, newPassword } = req.body;
