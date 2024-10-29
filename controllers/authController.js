@@ -362,41 +362,43 @@ exports.checkUsername = async (req, res) => {
   try {
     const { username } = req.params;
 
-    // Validate username format
-    if (!username || username.length < 3) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Username must be at least 3 characters long",
+    // First check if username exists in users table
+    const [users] = await pool.query(
+      'SELECT id FROM users WHERE username = ?',
+      [username]
+    );
+
+    if (users.length > 0) {
+      return res.json({
+        available: false,
+        message: 'Username is already taken'
       });
     }
 
-    // Check if username contains only allowed characters
-    const validUsernameRegex = /^[a-zA-Z0-9_-]+$/;
-    if (!validUsernameRegex.test(username)) {
-      return res.status(400).json({
-        status: "fail",
-        message:
-          "Username can only contain letters, numbers, underscores and hyphens",
+    // Then check if username exists as a codespace slug
+    const [codespaces] = await pool.query(
+      'SELECT id FROM codespaces WHERE slug = ?',
+      [username]
+    );
+
+    if (codespaces.length > 0) {
+      return res.json({
+        available: false,
+        message: 'This username conflicts with an existing codespace'
       });
     }
 
-    const [users] = await pool.query("SELECT * FROM users WHERE username = ?", [
-      username,
-    ]);
-
+    // If neither exists, username is available
     res.json({
-      status: "success",
-      available: users.length === 0,
-      message:
-        users.length === 0
-          ? "Username is available"
-          : "Username is already taken",
+      available: true,
+      message: 'Username is available'
     });
-  } catch (err) {
-    console.error("Username check error:", err);
+
+  } catch (error) {
+    console.error('Username check error:', error);
     res.status(500).json({
-      status: "error",
-      message: "An error occurred while checking username availability",
+      status: 'error',
+      message: 'Failed to check username availability'
     });
   }
 };
