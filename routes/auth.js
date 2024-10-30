@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const authMiddleware = require('../middleware/authMiddleware');
 
 // Authentication routes
 router.post('/login', authController.login);
@@ -20,5 +21,8 @@ router.post('/verify-otp', authController.verifyOTP);
 // Password management routes
 router.post('/reset-password', authController.resetPassword);
 router.post('/change-password', authController.changePassword);
+
+// Default codespace route (protected)
+router.get('/user/default-codespace', authMiddleware, authController.getDefaultCodespace);
 
 module.exports = router;

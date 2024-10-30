@@ -69,6 +69,7 @@ exports.verifyOTP = async (req, res) => {
     res.status(500).json({ message: "Server error while verifying OTP" });
   }
 };
+
 exports.login = async (req, res) => {
   try {
     const { emailOrUsername, password } = req.body;
@@ -88,20 +89,25 @@ exports.login = async (req, res) => {
 
     const [users] = await pool.query(query, [emailOrUsername]);
 
-    if (
-      users.length === 0 ||
-      !(await bcrypt.compare(password, users[0].password))
-    ) {
+    if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
       return res.status(401).json({
         status: "fail",
         message: "Incorrect email/username or password",
       });
     }
 
+    // Get default codespace
+    const [codespaces] = await pool.query(
+      'SELECT slug FROM codespaces WHERE owner_id = ? AND is_default = true',
+      [users[0].id]
+    );
+
     const token = signToken(users[0].id);
     res.status(200).json({
       status: "success",
       token,
+      username: users[0].username,
+      defaultCodespace: codespaces[0]?.slug || users[0].username
     });
   } catch (err) {
     res.status(400).json({
@@ -110,6 +116,7 @@ exports.login = async (req, res) => {
     });
   }
 };
+
 exports.register = async (req, res) => {
   const connection = await pool.getConnection();
   await connection.beginTransaction();
@@ -253,6 +260,7 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+
 exports.checkUsername = async (req, res) => {
   try {
     const { username } = req.params;
@@ -297,6 +305,7 @@ exports.checkUsername = async (req, res) => {
     });
   }
 };
+
 exports.checkEmail = async (req, res) => {
   try {
     const { email } = req.params;
@@ -313,6 +322,7 @@ exports.checkEmail = async (req, res) => {
     });
   }
 };
+
 exports.changePassword = async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   const userId = req.user.id; // Assuming your authMiddleware adds user info to the request
@@ -355,7 +365,6 @@ exports.changePassword = async (req, res) => {
       .json({ message: "An error occurred while changing the password" });
   }
 };
-// Add this to your verifyToken function to check blacklist
 
 exports.logout = async (req, res) => {
   try {
@@ -464,6 +473,73 @@ exports.checkEmailExists = async (req, res) => {
     res.status(500).json({
       status: "error",
       message: "An error occurred while checking email",
+    });
+  }
+};
+// Add this new function to get user's default codespace
+exports.getDefaultCodespace = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get user's default codespace and username
+    const [result] = await pool.query(
+      `SELECT c.slug as defaultCodespace, u.username 
+       FROM users u 
+       LEFT JOIN codespaces c ON u.id = c.owner_id AND c.is_default = true 
+       WHERE u.id = ?`,
+      [userId]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // If no default codespace exists, create one with username
+    if (!result[0].defaultCodespace) {
+      const defaultContent = `// Welcome to your private CodeSpace, ${result[0].username}! 🚀\n// This is your personal workspace.\n\nconsole.log("Happy coding! 🎉");`;
+      
+      await pool.query(
+        `INSERT INTO codespaces (
+          slug, 
+          owner_id, 
+          content, 
+          language, 
+          is_public, 
+          is_default, 
+          access_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          result[0].username,
+          userId,
+          defaultContent,
+          'javascript',
+          false,
+          true,
+          'private'
+        ]
+      );
+
+      return res.json({
+        status: 'success',
+        defaultCodespace: result[0].username,
+        username: result[0].username
+      });
+    }
+
+    res.json({
+      status: 'success',
+      defaultCodespace: result[0].defaultCodespace,
+      username: result[0].username
+    });
+
+  } catch (error) {
+    console.error('Get default codespace error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get default codespace'
     });
   }
 };
