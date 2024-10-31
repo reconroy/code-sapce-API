@@ -1,14 +1,28 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
+const { encrypt, decrypt } = require('../utils/encryption');
 
-// Add the getCodespace function that was missing
 exports.getCodespace = async (req, res) => {
   try {
     const { slug } = req.params;
     
-    // Get codespace with owner information
+    // First check if it's in cleanup_logs
+    const [deletedLogs] = await pool.query(
+      'SELECT * FROM cleanup_logs WHERE deleted_slug = ?',
+      [slug]
+    );
+
+    if (deletedLogs.length > 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace has expired'
+      });
+    }
+    
+    // Get codespace with owner information and check expiration
     const [codespaces] = await pool.query(
-      `SELECT c.*, u.username as owner_username 
+      `SELECT c.*, u.username as owner_username,
+       (c.owner_id IS NULL AND c.updated_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)) as is_expired
        FROM codespaces c 
        LEFT JOIN users u ON c.owner_id = u.id 
        WHERE c.slug = ?`,
@@ -24,15 +38,52 @@ exports.getCodespace = async (req, res) => {
 
     const codespace = codespaces[0];
 
-    // For public codespaces - allow immediate access without any checks
+    // Check if guest codespace is expired
+    if (codespace.is_expired) {
+      // Log the deletion first
+      await pool.query(
+        'INSERT INTO cleanup_logs (deleted_slug) VALUES (?)',
+        [slug]
+      );
+      
+      // Then delete the expired codespace
+      await pool.query('DELETE FROM codespaces WHERE slug = ?', [slug]);
+      
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace has expired'
+      });
+    }
+
+    // Decrypt content or set default
+    if (codespace.content) {
+      try {
+        codespace.content = decrypt(codespace.content);
+      } catch (error) {
+        console.error('Decryption error:', error);
+        codespace.content = ''; // Fallback to empty if decryption fails
+      }
+    } else {
+      codespace.content = '';
+    }
+
+    // For public codespaces - allow immediate access
     if (codespace.access_type === 'public') {
+      // Update last activity for guest codespaces
+      if (!codespace.owner_id) {
+        await pool.query(
+          'UPDATE codespaces SET updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
+          [slug]
+        );
+      }
+      
       return res.json({
         status: 'success',
         data: codespace
       });
     }
 
-    // Only check authentication for private codespaces
+    // Handle private codespaces
     if (codespace.access_type === 'private') {
       const token = req.headers.authorization?.split(' ')[1];
       
@@ -47,7 +98,7 @@ exports.getCodespace = async (req, res) => {
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
-        // Check if user is owner or collaborator
+        // Check owner access
         if (codespace.owner_id === decoded.id) {
           return res.json({
             status: 'success',
@@ -55,6 +106,7 @@ exports.getCodespace = async (req, res) => {
           });
         }
 
+        // Check collaborator access
         const [access] = await pool.query(
           'SELECT * FROM codespace_access WHERE codespace_id = ? AND user_id = ?',
           [codespace.id, decoded.id]
@@ -67,19 +119,21 @@ exports.getCodespace = async (req, res) => {
             owner: codespace.owner_username
           });
         }
+
+        // Access granted for collaborator
+        return res.json({
+          status: 'success',
+          data: codespace
+        });
+
       } catch (error) {
+        console.error('Token verification error:', error);
         return res.status(401).json({
           status: 'fail',
           message: 'Invalid or expired token'
         });
       }
     }
-
-    // If we get here, access is granted
-    res.json({
-      status: 'success',
-      data: codespace
-    });
 
   } catch (error) {
     console.error('Error in getCodespace:', error);
@@ -94,6 +148,9 @@ exports.updateCodespace = async (req, res) => {
   try {
     const { slug } = req.params;
     const { content, language } = req.body;
+
+    // Make sure we're encrypting the content
+    const encryptedContent = encrypt(content || '');
 
     // Get codespace details first
     const [codespaces] = await pool.query(
@@ -114,7 +171,7 @@ exports.updateCodespace = async (req, res) => {
     if (codespace.access_type === 'public') {
       await pool.query(
         'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
-        [content, language, slug]
+        [encryptedContent, language, slug]
       );
       return res.json({
         status: 'success',
@@ -149,7 +206,7 @@ exports.updateCodespace = async (req, res) => {
     // Update codespace
     await pool.query(
       'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
-      [content, language, slug]
+      [encryptedContent, language, slug]
     );
 
     res.json({
@@ -201,11 +258,12 @@ exports.createCodespace = async (req, res) => {
     }
 
     // Create new codespace
+    const encryptedContent = encrypt(''); 
     const [result] = await connection.query(
       `INSERT INTO codespaces (
         slug, owner_id, content, language, access_type, is_public
       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      [slug, owner_id, '', 'javascript', 'public', true]
+      [slug, owner_id, encryptedContent, 'javascript', 'public', true]
     );
 
     const newCodespace = {

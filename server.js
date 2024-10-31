@@ -9,6 +9,7 @@ const pool = require('./config/database');
 const authMiddleware = require('./middleware/authMiddleware');
 const codespaceRoutes = require('./routes/codespace');
 const authRoutes = require('./routes/auth');
+const { encrypt, decrypt } = require('./utils/encryption');  // Add this import
 
 require('dotenv').config();
 
@@ -71,9 +72,9 @@ io.on('connection', (socket) => {
 
   socket.on('codeChange', async ({ slug, content }) => {
     try {
-      console.log(`Code change in room ${slug}`);
-      await pool.query('UPDATE codespaces SET content = ? WHERE slug = ?', [content, slug]);
-      io.to(slug).emit('codeUpdate', content);
+      const encryptedContent = encrypt(content);
+      await pool.query('UPDATE codespaces SET content = ? WHERE slug = ?', [encryptedContent, slug]);
+      io.to(slug).emit('codeUpdate', content); // Send unencrypted content to clients
     } catch (error) {
       console.error('Error saving code:', error);
     }
@@ -147,10 +148,19 @@ app.put('/api/codespace/:slug', async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'dist')));
+// REMOVE or COMMENT OUT these lines if they exist in your server.js
+// app.use(express.static('dist'));
+// app.get('*', (req, res) => {
+//   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// });
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// INSTEAD, add these handlers
+// Handle 404 for API routes
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ message: 'API endpoint not found' });
+});
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Not found' });
 });
 
 server.listen(port, () => {
