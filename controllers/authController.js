@@ -543,3 +543,16 @@ exports.getDefaultCodespace = async (req, res) => {
     });
   }
 };
+
+exports.getUserCount = async (req, res) => {
+  try {
+    const [result] = await pool.query('SELECT COUNT(*) as count FROM users');
+    res.json({ count: result[0].count });
+  } catch (error) {
+    console.error('Error getting user count:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get user count'
+    });
+  }
+};

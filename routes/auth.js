@@ -25,4 +25,7 @@ router.post('/change-password', authController.changePassword);
 // Default codespace route (protected)
 router.get('/user/default-codespace', authMiddleware, authController.getDefaultCodespace);
 
+// Add this new route
+router.get('/users/count', authController.getUserCount);
+
 module.exports = router;
