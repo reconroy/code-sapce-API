@@ -9,6 +9,7 @@ const pool = require('./config/database');
 const authMiddleware = require('./middleware/authMiddleware');
 const codespaceRoutes = require('./routes/codespace');
 const authRoutes = require('./routes/auth');
+const { encrypt, decrypt } = require('./utils/encryption');  // Add this import
 
 require('dotenv').config();
 
@@ -147,10 +148,19 @@ app.put('/api/codespace/:slug', async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'dist')));
+// REMOVE or COMMENT OUT these lines if they exist in your server.js
+// app.use(express.static('dist'));
+// app.get('*', (req, res) => {
+//   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// });
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// INSTEAD, add these handlers
+// Handle 404 for API routes
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ message: 'API endpoint not found' });
+});
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Not found' });
 });
 
 server.listen(port, () => {
