@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
+const { encrypt, decrypt } = require('../utils/encryption');
 
 // Add the getCodespace function that was missing
 exports.getCodespace = async (req, res) => {
@@ -23,6 +24,13 @@ exports.getCodespace = async (req, res) => {
     }
 
     const codespace = codespaces[0];
+
+    // Add null check before decryption
+    if (codespace.content) {
+      codespace.content = decrypt(codespace.content);
+    } else {
+      codespace.content = ''; // Set default empty content
+    }
 
     // For public codespaces - allow immediate access without any checks
     if (codespace.access_type === 'public') {
@@ -95,6 +103,9 @@ exports.updateCodespace = async (req, res) => {
     const { slug } = req.params;
     const { content, language } = req.body;
 
+    // Make sure we're encrypting the content
+    const encryptedContent = encrypt(content || '');
+
     // Get codespace details first
     const [codespaces] = await pool.query(
       'SELECT id, owner_id, access_type FROM codespaces WHERE slug = ?',
@@ -114,7 +125,7 @@ exports.updateCodespace = async (req, res) => {
     if (codespace.access_type === 'public') {
       await pool.query(
         'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
-        [content, language, slug]
+        [encryptedContent, language, slug]
       );
       return res.json({
         status: 'success',
@@ -149,7 +160,7 @@ exports.updateCodespace = async (req, res) => {
     // Update codespace
     await pool.query(
       'UPDATE codespaces SET content = ?, language = ? WHERE slug = ?',
-      [content, language, slug]
+      [encryptedContent, language, slug]
     );
 
     res.json({
@@ -201,11 +212,12 @@ exports.createCodespace = async (req, res) => {
     }
 
     // Create new codespace
+    const encryptedContent = encrypt(''); 
     const [result] = await connection.query(
       `INSERT INTO codespaces (
         slug, owner_id, content, language, access_type, is_public
       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      [slug, owner_id, '', 'javascript', 'public', true]
+      [slug, owner_id, encryptedContent, 'javascript', 'public', true]
     );
 
     const newCodespace = {

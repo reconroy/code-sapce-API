@@ -19,7 +19,7 @@ CREATE TABLE codespaces (
     id INT PRIMARY KEY AUTO_INCREMENT,
     slug VARCHAR(255) NOT NULL UNIQUE,
     owner_id INT,
-    content LONGTEXT,
+    content LONGTEXT ,
     language VARCHAR(50) DEFAULT 'javascript',
     is_public BOOLEAN DEFAULT true,
     is_default BOOLEAN DEFAULT false,

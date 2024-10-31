@@ -71,9 +71,9 @@ io.on('connection', (socket) => {
 
   socket.on('codeChange', async ({ slug, content }) => {
     try {
-      console.log(`Code change in room ${slug}`);
-      await pool.query('UPDATE codespaces SET content = ? WHERE slug = ?', [content, slug]);
-      io.to(slug).emit('codeUpdate', content);
+      const encryptedContent = encrypt(content);
+      await pool.query('UPDATE codespaces SET content = ? WHERE slug = ?', [encryptedContent, slug]);
+      io.to(slug).emit('codeUpdate', content); // Send unencrypted content to clients
     } catch (error) {
       console.error('Error saving code:', error);
     }
