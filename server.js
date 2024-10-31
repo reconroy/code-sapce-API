@@ -9,7 +9,7 @@ const pool = require('./config/database');
 const authMiddleware = require('./middleware/authMiddleware');
 const codespaceRoutes = require('./routes/codespace');
 const authRoutes = require('./routes/auth');
-const { encrypt, decrypt } = require('./utils/encryption');  // Add this import
+const { encrypt, decrypt, validateKey } = require('./utils/encryption');
 
 require('dotenv').config();
 
@@ -163,9 +163,16 @@ app.use('*', (req, res) => {
   res.status(404).json({ message: 'Not found' });
 });
 
+// Add this before starting the server
+if (!validateKey()) {
+    console.error('Invalid encryption key length. Please check your ENCRYPTION_KEY in .env');
+    process.exit(1);
+}
+
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
 app.get('/api/codespace/:slug', async (req, res) => {
   const { slug } = req.params;
   let userId = null;
