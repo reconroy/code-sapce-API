@@ -1,14 +1,16 @@
+const { encrypt } = require('../utils/encryption');  // Add this import
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto");
+// const crypto = require("crypto");
 const pool = require("../config/database");
 const emailService = require("../services/emailService");
 
-const signToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
+const signToken = (userId) => {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN
   });
 };
+
 
 const otpStore = new Map(); // In-memory store for OTPs. In production, use a database.
 
@@ -144,17 +146,42 @@ exports.register = async (req, res) => {
     if (!validUsernameRegex.test(username)) {
       return res.status(400).json({
         status: "fail",
-        message:
-          "Username can only contain letters, numbers, underscores and hyphens",
+        message: "Username can only contain letters, numbers, underscores and hyphens",
       });
     }
 
     // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
         status: "fail",
         message: "Please provide a valid email address",
+      });
+    }
+
+    // Check if username already exists
+    const [existingUsername] = await connection.query(
+      'SELECT id FROM users WHERE username = ?',
+      [username]
+    );
+
+    if (existingUsername.length > 0) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Username already taken",
+      });
+    }
+
+    // Check if email already exists
+    const [existingEmail] = await connection.query(
+      'SELECT id FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (existingEmail.length > 0) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Email already registered",
       });
     }
 
@@ -163,12 +190,30 @@ exports.register = async (req, res) => {
     // Create user with default_codespace_slug
     const [userResult] = await connection.query(
       "INSERT INTO users (username, email, password, default_codespace_slug) VALUES (?, ?, ?, ?)",
-      [username, email, hashedPassword, username] // Store username as default_codespace_slug
+      [username, email, hashedPassword, username]
     );
 
-    // Create default codespace
-    const defaultContent = `// Welcome to your private CodeSpace, ${username}! 🚀\n// This is your personal workspace where you can:\n// - Write and test code\n// - Save your snippets\n// - Work on your projects\n\nfunction greeting() {\n  console.log("Welcome to CodeSpace!");\n  console.log("This is your private workspace.");\n  console.log("Happy coding! 🎉");\n}\n\n// Let's start coding!\ngreeting();`;
+    // Create welcome message
+    const defaultContent = 
+`// Welcome to your private CodeSpace, ${username}! 🚀
+// This is your personal workspace where you can:
+// - Write and test code
+// - Save your snippets
+// - Work on your projects
 
+function greeting() {
+  console.log("Welcome to CodeSpace!");
+  console.log("This is your private workspace.");
+  console.log("Happy coding! 🎉");
+}
+
+// Let's start coding!
+greeting();`;
+
+    // Encrypt the content
+    const encryptedContent = encrypt(defaultContent);
+
+    // Create default codespace with encrypted content
     await connection.query(
       `INSERT INTO codespaces (
         slug, 
@@ -182,7 +227,7 @@ exports.register = async (req, res) => {
       [
         username,
         userResult.insertId,
-        defaultContent,
+        encryptedContent,
         'javascript',
         false,
         true,
@@ -192,8 +237,10 @@ exports.register = async (req, res) => {
 
     await connection.commit();
 
+    // Generate JWT token
     const token = signToken(userResult.insertId);
 
+    // Send success response
     res.status(201).json({
       status: "success",
       token,
@@ -202,7 +249,7 @@ exports.register = async (req, res) => {
           id: userResult.insertId,
           username,
           email,
-          default_codespace_slug: username // Match the database column name
+          default_codespace_slug: username
         }
       }
     });
@@ -210,6 +257,15 @@ exports.register = async (req, res) => {
   } catch (err) {
     await connection.rollback();
     console.error("Registration error:", err);
+    
+    // Send appropriate error message
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({
+        status: "fail",
+        message: "Username or email already exists"
+      });
+    }
+    
     res.status(400).json({
       status: "fail",
       message: err.message || "Registration failed. Please try again."
