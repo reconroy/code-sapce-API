@@ -31,7 +31,18 @@ const port = process.env.PORT || 5000;
 app.use('/api/auth', authRoutes);
 app.use('/api/codespace', codespaceRoutes);
 app.use('/api/diff', diffRoute);
-
+app.get('/api/users/count', async (req, res) => {
+  try {
+    const [result] = await pool.query('SELECT COUNT(*) as count FROM users');
+    res.json({ count: result[0].count });
+  } catch (error) {
+    console.error('Error getting user count:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get user count'
+    });
+  }
+});
 // Auth endpoints
 app.post('/api/login', authController.login);
 app.post('/api/register', authController.register);
