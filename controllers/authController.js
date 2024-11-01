@@ -6,9 +6,28 @@ const pool = require("../config/database");
 const emailService = require("../services/emailService");
 
 const signToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN
+  const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN // This will now use 10m from env
   });
+
+  // Calculate expiry time in milliseconds for frontend
+  const expiresIn = parseDuration(process.env.JWT_EXPIRES_IN);
+  
+  return { token, expiresIn };
+};
+
+// Helper function to parse duration strings
+const parseDuration = (durationString) => {
+  const value = parseInt(durationString);
+  const unit = durationString.slice(-1).toLowerCase();
+  
+  switch(unit) {
+    case 's': return value * 1000;
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    case 'd': return value * 24 * 60 * 60 * 1000;
+    default: return value;
+  }
 };
 
 
@@ -83,7 +102,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Check if the input is an email or username
     const isEmail = emailOrUsername.includes("@");
     const query = isEmail
       ? "SELECT * FROM users WHERE email = ?"
@@ -104,17 +122,42 @@ exports.login = async (req, res) => {
       [users[0].id]
     );
 
-    const token = signToken(users[0].id);
+    // Generate token with expiry info
+    const { token, expiresIn } = signToken(users[0].id);
+
     res.status(200).json({
       status: "success",
       token,
-      username: users[0].username,
+      expiresIn,
+      user: {
+        id: users[0].id,
+        username: users[0].username,
+        email: users[0].email
+      },
       defaultCodespace: codespaces[0]?.slug || users[0].username
     });
   } catch (err) {
     res.status(400).json({
       status: "fail",
       message: err.message,
+    });
+  }
+};
+
+exports.extendSession = async (req, res) => {
+  try {
+    // User is already verified through authMiddleware
+    const { token, expiresIn } = signToken(req.user.id);
+
+    res.status(200).json({
+      status: "success",
+      token,
+      expiresIn
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: "Failed to extend session"
     });
   }
 };
@@ -237,20 +280,19 @@ greeting();`;
 
     await connection.commit();
 
-    // Generate JWT token
-    const token = signToken(userResult.insertId);
+    // Generate token with expiry info
+    const { token, expiresIn } = signToken(userResult.insertId);
 
-    // Send success response
+    // Send success response with session info
     res.status(201).json({
       status: "success",
       token,
-      data: {
-        user: {
-          id: userResult.insertId,
-          username,
-          email,
-          default_codespace_slug: username
-        }
+      expiresIn,
+      user: {
+        id: userResult.insertId,
+        username,
+        email,
+        default_codespace_slug: username
       }
     });
 
@@ -609,6 +651,48 @@ exports.getUserCount = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to get user count'
+    });
+  }
+};
+
+exports.getCurrentUser = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get user data
+    const [users] = await pool.query(
+      'SELECT id, username, email, default_codespace_slug FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'User not found'
+      });
+    }
+
+    // Get default codespace
+    const [codespaces] = await pool.query(
+      'SELECT slug FROM codespaces WHERE owner_id = ? AND is_default = true',
+      [userId]
+    );
+
+    res.status(200).json({
+      status: 'success',
+      user: {
+        id: users[0].id,
+        username: users[0].username,
+        email: users[0].email,
+        defaultCodespace: codespaces[0]?.slug || users[0].username
+      }
+    });
+
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch user data'
     });
   }
 };
