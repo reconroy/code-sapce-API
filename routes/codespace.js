@@ -10,4 +10,5 @@ router.post('/', codespaceController.createCodespace);
 // Protected routes
 router.put('/:slug', authMiddleware, codespaceController.updateCodespace);
 
+router.get('/user/codespaces', authMiddleware, codespaceController.getUserCodespaces);
 module.exports = router;

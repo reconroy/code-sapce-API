@@ -316,3 +316,32 @@ exports.createCodespace = async (req, res) => {
     connection.release();
   }
 };
+
+exports.getUserCodespaces = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [codespaces] = await pool.query(
+      `SELECT 
+        c.*, 
+        u.username as owner_username
+      FROM codespaces c
+      JOIN users u ON c.owner_id = u.id
+      WHERE c.owner_id = ?
+      ORDER BY c.is_default DESC, c.created_at DESC`,
+      [userId]
+    );
+
+    res.json({
+      status: 'success',
+      data: codespaces
+    });
+
+  } catch (error) {
+    console.error('Error fetching user codespaces:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch codespaces'
+    });
+  }
+};
