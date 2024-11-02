@@ -10,21 +10,57 @@ const authMiddleware = require('./middleware/authMiddleware');
 const codespaceRoutes = require('./routes/codespace');
 const authRoutes = require('./routes/auth');
 const { encrypt, decrypt, validateKey } = require('./utils/encryption');
+const setupWebSocketHandlers = require('./websocket/handlers');
 
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+
+// CORS middleware setup
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200
+}));
+
+// Additional middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Socket.IO setup with CORS
 const io = new Server(server, {
   cors: {
     origin: process.env.FRONTEND_URL ,
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
+});
+// Setup WebSocket handlers
+setupWebSocketHandlers(io);
+// Make io accessible throughout the app
+app.set('io', io);
+
+// Enable preflight requests
+app.options('*', cors());
+
+// Headers middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || "http://localhost:5173");
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
   }
+  next();
 });
 
-// Middleware
-app.use(cors());
-app.use(express.json());
 const port = process.env.PORT || 5000;
 
 // Routes
@@ -43,6 +79,7 @@ app.get('/api/users/count', async (req, res) => {
     });
   }
 });
+
 // Auth endpoints
 app.post('/api/login', authController.login);
 app.post('/api/register', authController.register);
@@ -53,8 +90,9 @@ app.post('/api/verify-otp', authController.verifyOTP);
 app.post('/api/reset-password', authController.resetPassword);
 app.post('/api/change-password', authMiddleware, authController.changePassword);
 
+// Socket connection handling
 io.on('connection', (socket) => {
-  console.log('New client connected');
+  console.log('Client connected:', socket.id);
 
   socket.on('joinRoom', async (slug) => {
     try {
@@ -81,6 +119,21 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('joinUserSpace', (userId) => {
+    if (userId) {
+      socket.join(`user_${userId}`);
+      console.log(`User ${userId} joined their personal space`);
+    }
+  });
+
+  socket.on('codespaceUpdated', ({ userId, codespace }) => {
+    io.to(`user_${userId}`).emit('codespaceSettingsChanged', codespace);
+  });
+
+  socket.on('codespaceDeleted', ({ userId, slug }) => {
+    io.to(`user_${userId}`).emit('codespaceRemoved', slug);
+  });
+
   socket.on('codeChange', async ({ slug, content }) => {
     try {
       const encryptedContent = encrypt(content);
@@ -102,7 +155,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected');
+    console.log('Client disconnected:', socket.id);
   });
 });
 
@@ -183,7 +236,6 @@ if (!validateKey()) {
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-
 app.get('/api/codespace/:slug', async (req, res) => {
   const { slug } = req.params;
   let userId = null;
