@@ -345,3 +345,171 @@ exports.getUserCodespaces = async (req, res) => {
     });
   }
 };
+
+exports.checkSlugAvailability = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const [existing] = await pool.query(
+      'SELECT id FROM codespaces WHERE slug = ?',
+      [slug]
+    );
+    
+    res.json({
+      status: 'success',
+      available: existing.length === 0
+    });
+  } catch (error) {
+    console.error('Error checking slug availability:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to check slug availability'
+    });
+  }
+};
+
+exports.updateCodespaceSettings = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { newSlug, accessType, passkey, isArchived } = req.body;
+    const userId = req.user.id;
+
+    console.log('Updating codespace:', { slug, newSlug, accessType, isArchived }); // Debug log
+
+    // First get the existing codespace
+    const [codespaces] = await pool.query(
+      'SELECT id, owner_id, is_default FROM codespaces WHERE slug = ?',
+      [slug]
+    );
+
+    if (codespaces.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    const codespace = codespaces[0];
+
+    // Check ownership
+    if (codespace.owner_id !== userId) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'You do not have permission to modify this codespace'
+      });
+    }
+
+    // If changing slug, check availability
+    if (newSlug && newSlug !== slug) {
+      const [existing] = await pool.query(
+        'SELECT id FROM codespaces WHERE slug = ? AND id != ?',
+        [newSlug, codespace.id]
+      );
+
+      if (existing.length > 0) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'This name is already taken'
+        });
+      }
+    }
+
+    // Update the existing codespace
+    const updateQuery = `
+      UPDATE codespaces 
+      SET 
+        slug = ?,
+        access_type = ?,
+        passkey = ?,
+        is_archived = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `;
+
+    const updateValues = [
+      newSlug || slug,
+      accessType,
+      passkey || null,
+      isArchived || false,
+      codespace.id
+    ];
+
+    await pool.query(updateQuery, updateValues);
+
+    // Get the io instance
+    const io = req.app.get('io');
+    
+    if (io) {
+      // Emit websocket event
+      io.to(`user_${userId}`).emit('codespaceSettingsChanged', {
+        id: codespace.id,
+        slug: newSlug || slug,
+        accessType,
+        isArchived,
+        hasPasskey: !!passkey
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Codespace settings updated successfully',
+      data: {
+        newSlug: newSlug || slug,
+        accessType,
+        isArchived,
+        hasPasskey: !!passkey
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating codespace settings:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update codespace settings',
+      details: error.message
+    });
+  }
+};
+
+exports.deleteCodespace = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const userId = req.user.id;
+
+    // Verify ownership
+    const [codespace] = await pool.query(
+      'SELECT owner_id FROM codespaces WHERE slug = ?',
+      [slug]
+    );
+
+    if (codespace.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    if (codespace[0].owner_id !== userId) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'You do not have permission to delete this codespace'
+      });
+    }
+
+    await pool.query('DELETE FROM codespaces WHERE slug = ?', [slug]);
+
+    // Emit websocket event
+    req.app.get('io').to(`user_${userId}`).emit('codespaceRemoved', slug);
+
+    res.json({
+      status: 'success',
+      message: 'Codespace deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Error deleting codespace:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to delete codespace'
+    });
+  }
+};

@@ -9,6 +9,9 @@ router.post('/register', authController.register);
 router.post('/logout', authController.logout);
 router.get('/verify', authController.verifyToken);
 
+// Session management route
+router.post('/extend-session', authMiddleware, authController.extendSession);
+
 // Email and username verification routes
 router.get('/check-username/:username', authController.checkUsername);
 router.get('/check-email/:email', authController.checkEmailExists);
@@ -25,7 +28,10 @@ router.post('/change-password', authController.changePassword);
 // Default codespace route (protected)
 router.get('/user/default-codespace', authMiddleware, authController.getDefaultCodespace);
 
-// Add this new route
+// User count route
 router.get('/users/count', authController.getUserCount);
+
+// Add this new route for fetching user data
+router.get('/users/me', authMiddleware, authController.getCurrentUser);
 
 module.exports = router;
