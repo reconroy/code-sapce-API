@@ -44,4 +44,7 @@ router.get('/user/codespaces', authMiddleware, async (req, res) => {
   }
 });
 
+// Add this new route for access logs
+router.get('/:slug/access-logs', authMiddleware, codespaceController.getAccessLogs);
+
 module.exports = router;

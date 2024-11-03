@@ -5,28 +5,23 @@ const { encrypt, decrypt } = require('../utils/encryption');
 exports.getCodespace = async (req, res) => {
   try {
     const { slug } = req.params;
-    
-    // First check if it's in cleanup_logs
-    const [deletedLogs] = await pool.query(
-      'SELECT * FROM cleanup_logs WHERE deleted_slug = ?',
-      [slug]
-    );
+    const userId = req.user?.id;
 
-    if (deletedLogs.length > 0) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Codespace has expired'
-      });
-    }
-    
-    // Get codespace with owner information and check expiration
     const [codespaces] = await pool.query(
       `SELECT c.*, u.username as owner_username,
-       (c.owner_id IS NULL AND c.updated_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)) as is_expired
-       FROM codespaces c 
-       LEFT JOIN users u ON c.owner_id = u.id 
+        CASE 
+          WHEN c.access_type = 'public' THEN true
+          WHEN c.owner_id = ? THEN true
+          WHEN c.access_type = 'shared' AND EXISTS (
+            SELECT 1 FROM codespace_access 
+            WHERE codespace_id = c.id AND user_id = ?
+          ) THEN true
+          ELSE false
+        END as hasAccess
+       FROM codespaces c
+       LEFT JOIN users u ON c.owner_id = u.id
        WHERE c.slug = ?`,
-      [slug]
+      [userId, userId, slug]
     );
 
     if (codespaces.length === 0) {
@@ -38,102 +33,47 @@ exports.getCodespace = async (req, res) => {
 
     const codespace = codespaces[0];
 
-    // Check if guest codespace is expired
-    if (codespace.is_expired) {
-      // Log the deletion first
-      await pool.query(
-        'INSERT INTO cleanup_logs (deleted_slug) VALUES (?)',
-        [slug]
-      );
-      
-      // Then delete the expired codespace
-      await pool.query('DELETE FROM codespaces WHERE slug = ?', [slug]);
-      
-      return res.status(404).json({
-        status: 'fail',
-        message: 'Codespace has expired'
-      });
+    if (codespace.access_type === 'shared') {
+      if (codespace.owner_id === userId) {
+        return res.json({
+          status: 'success',
+          data: codespace,
+          hasAccess: true
+        });
+      }
+
+      if (!userId) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Authentication required for shared codespace',
+          owner: codespace.owner_username
+        });
+      }
+
+      if (!codespace.hasAccess) {
+        return res.status(403).json({
+          status: 'fail',
+          message: 'Passkey required',
+          requiresPasskey: true,
+          owner: codespace.owner_username
+        });
+      }
     }
 
-    // Decrypt content or set default
     if (codespace.content) {
       try {
         codespace.content = decrypt(codespace.content);
       } catch (error) {
         console.error('Decryption error:', error);
-        codespace.content = ''; // Fallback to empty if decryption fails
-      }
-    } else {
-      codespace.content = '';
-    }
-
-    // For public codespaces - allow immediate access
-    if (codespace.access_type === 'public') {
-      // Update last activity for guest codespaces
-      if (!codespace.owner_id) {
-        await pool.query(
-          'UPDATE codespaces SET updated_at = CURRENT_TIMESTAMP WHERE slug = ?',
-          [slug]
-        );
-      }
-      
-      return res.json({
-        status: 'success',
-        data: codespace
-      });
-    }
-
-    // Handle private codespaces
-    if (codespace.access_type === 'private') {
-      const token = req.headers.authorization?.split(' ')[1];
-      
-      if (!token) {
-        return res.status(403).json({
-          status: 'fail',
-          message: 'Access denied',
-          owner: codespace.owner_username
-        });
-      }
-
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        
-        // Check owner access
-        if (codespace.owner_id === decoded.id) {
-          return res.json({
-            status: 'success',
-            data: codespace
-          });
-        }
-
-        // Check collaborator access
-        const [access] = await pool.query(
-          'SELECT * FROM codespace_access WHERE codespace_id = ? AND user_id = ?',
-          [codespace.id, decoded.id]
-        );
-
-        if (access.length === 0) {
-          return res.status(403).json({
-            status: 'fail',
-            message: 'Access denied',
-            owner: codespace.owner_username
-          });
-        }
-
-        // Access granted for collaborator
-        return res.json({
-          status: 'success',
-          data: codespace
-        });
-
-      } catch (error) {
-        console.error('Token verification error:', error);
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Invalid or expired token'
-        });
+        codespace.content = '';
       }
     }
+
+    res.json({
+      status: 'success',
+      data: codespace,
+      hasAccess: codespace.hasAccess
+    });
 
   } catch (error) {
     console.error('Error in getCodespace:', error);
@@ -510,6 +450,59 @@ exports.deleteCodespace = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to delete codespace'
+    });
+  }
+};
+
+exports.getAccessLogs = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const userId = req.user.id;
+
+    // First verify if user is the owner
+    const [codespaces] = await pool.query(
+      'SELECT id, owner_id FROM codespaces WHERE slug = ?',
+      [slug]
+    );
+
+    if (codespaces.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    const codespace = codespaces[0];
+
+    if (codespace.owner_id !== userId) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Only the owner can view access logs'
+      });
+    }
+
+    // Get access logs with user information
+    const [accessLogs] = await pool.query(
+      `SELECT u.username, ca.created_at as access_granted_at
+       FROM codespace_access ca
+       JOIN users u ON ca.user_id = u.id
+       WHERE ca.codespace_id = ?
+       ORDER BY ca.created_at DESC`,
+      [codespace.id]
+    );
+
+    console.log('Access logs found:', accessLogs); // Debug log
+
+    res.json({
+      status: 'success',
+      data: accessLogs
+    });
+
+  } catch (error) {
+    console.error('Error getting access logs:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get access logs'
     });
   }
 };
