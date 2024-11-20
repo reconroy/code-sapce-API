@@ -5,7 +5,7 @@ const path = require('path');
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'codewithroy22@gmail.com',
+    user: 'yourcodespaces@gmail.com',
     pass: process.env.EMAIL_APP_PASSWORD
   }
 });
@@ -13,7 +13,7 @@ const transporter = nodemailer.createTransport({
 exports.sendOTP = async (to, otp) => {
   let base64Image;
   try {
-    const imagePath = path.join(__dirname, '../static/completeLogo.png');
+    const imagePath = path.join(__dirname, './static/completeLogo.png');
     base64Image = fs.readFileSync(imagePath, { encoding: 'base64' });
   } catch (error) {
     console.error('Error reading logo file:', error);
