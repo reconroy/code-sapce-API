@@ -29,6 +29,7 @@ app.use(cors({
 // Additional middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Socket.IO setup with CORS
 const io = new Server(server, {
