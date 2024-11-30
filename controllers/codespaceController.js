@@ -33,46 +33,23 @@ exports.getCodespace = async (req, res) => {
 
     const codespace = codespaces[0];
 
-    if (codespace.access_type === 'shared') {
-      if (codespace.owner_id === userId) {
-        return res.json({
-          status: 'success',
-          data: codespace,
-          hasAccess: true
-        });
-      }
-
-      if (!userId) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Authentication required for shared codespace',
-          owner: codespace.owner_username
-        });
-      }
-
-      if (!codespace.hasAccess) {
-        return res.status(403).json({
-          status: 'fail',
-          message: 'Passkey required',
-          requiresPasskey: true,
-          owner: codespace.owner_username
-        });
-      }
-    }
-
+    // Decrypt the content before sending
     if (codespace.content) {
       try {
         codespace.content = decrypt(codespace.content);
       } catch (error) {
-        console.error('Decryption error:', error);
-        codespace.content = '';
+        console.error('Error decrypting content:', error);
+        codespace.content = ''; // Fallback to empty string if decryption fails
       }
     }
 
-    res.json({
+    // Always include hasAccess in the response
+    return res.json({
       status: 'success',
-      data: codespace,
-      hasAccess: codespace.hasAccess
+      data: {
+        ...codespace,
+        hasAccess: codespace.hasAccess || codespace.owner_id === userId
+      }
     });
 
   } catch (error) {
@@ -481,6 +458,55 @@ exports.getAccessLogs = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to get access logs'
+    });
+  }
+};
+
+exports.verifyPasskey = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { passkey } = req.body;
+    const userId = req.user.id;
+
+    // Get codespace details
+    const [codespaces] = await pool.query(
+      'SELECT id, owner_id, passkey FROM codespaces WHERE slug = ?',
+      [slug]
+    );
+
+    if (codespaces.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    const codespace = codespaces[0];
+
+    // Verify passkey
+    if (codespace.passkey !== passkey) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Invalid passkey'
+      });
+    }
+
+    // Grant access by adding to codespace_access table
+    await pool.query(
+      'INSERT INTO codespace_access (codespace_id, user_id) VALUES (?, ?)',
+      [codespace.id, userId]
+    );
+
+    res.json({
+      status: 'success',
+      message: 'Access granted successfully'
+    });
+
+  } catch (error) {
+    console.error('Error verifying passkey:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to verify passkey'
     });
   }
 };
