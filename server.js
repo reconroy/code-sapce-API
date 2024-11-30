@@ -11,6 +11,8 @@ const codespaceRoutes = require('./routes/codespace');
 const authRoutes = require('./routes/auth');
 const { encrypt, decrypt, validateKey } = require('./utils/encryption');
 const setupWebSocketHandlers = require('./websocket/handlers');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpecs = require('./config/swagger');
 
 require('dotenv').config();
 
@@ -29,6 +31,8 @@ app.use(cors({
 // Additional middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+//fot the index file in public
+// app.use(express.static(path.join(__dirname, 'public')));
 
 // Socket.IO setup with CORS
 const io = new Server(server, {
@@ -159,21 +163,143 @@ io.on('connection', (socket) => {
   });
 });
 
+/**
+ * @swagger
+ * /api/codespace/{slug}:
+ *   get:
+ *     tags: [Codespace]
+ *     summary: Get a codespace by slug with access control
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Codespace found successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: success
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     slug:
+ *                       type: string
+ *                     content:
+ *                       type: string
+ *                     language:
+ *                       type: string
+ *                     owner_id:
+ *                       type: integer
+ *                     owner_username:
+ *                       type: string
+ *                     access_type:
+ *                       type: string
+ *                       enum: [public, private, shared]
+ *                     is_default:
+ *                       type: boolean
+ *       403:
+ *         description: Access denied
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: fail
+ *                 message:
+ *                   type: string
+ *                 owner:
+ *                   type: string
+ *       404:
+ *         description: Codespace not found
+ */
 app.get('/api/codespace/:slug', async (req, res) => {
   const { slug } = req.params;
+  let userId = null;
+
+  // Get user ID if token exists
   try {
-    console.log('Fetching codespace for slug:', slug);
-    const [rows] = await pool.query('SELECT * FROM codespaces WHERE slug = ?', [slug]);
-    if (rows.length > 0) {
-      console.log('Codespace found:', rows[0]);
-      res.json(rows[0]);
-    } else {
-      console.log('Codespace not found');
-      res.status(404).json({ error: 'Codespace not found' });
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.id;
     }
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
+    // Invalid token, continue as guest
+  }
+
+  try {
+    // Get codespace with owner information
+    const [codespaces] = await pool.query(
+      `SELECT c.*, u.username as owner_username 
+       FROM codespaces c 
+       JOIN users u ON c.owner_id = u.id 
+       WHERE c.slug = ?`,
+      [slug]
+    );
+
+    if (codespaces.length === 0) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Codespace not found'
+      });
+    }
+
+    const codespace = codespaces[0];
+
+    // Check access permissions
+    if (codespace.access_type === 'private' || codespace.is_default) {
+      // Check if user is the owner
+      if (codespace.owner_id !== userId) {
+        // Check if user has explicit access
+        if (userId) {
+          const [access] = await pool.query(
+            'SELECT * FROM codespace_access WHERE codespace_id = ? AND user_id = ?',
+            [codespace.id, userId]
+          );
+          
+          if (access.length === 0) {
+            return res.status(403).json({
+              status: 'fail',
+              message: 'Access denied',
+              owner: codespace.owner_username
+            });
+          }
+        } else {
+          // Guest user, no access
+          return res.status(403).json({
+            status: 'fail',
+            message: 'Access denied',
+            owner: codespace.owner_username
+          });
+        }
+      }
+    }
+
+    // User has access, return codespace data
+    res.json({
+      status: 'success',
+      data: codespace
+    });
+  } catch (error) {
+    console.error('Error fetching codespace:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error'
+    });
   }
 });
 
@@ -212,14 +338,45 @@ app.put('/api/codespace/:slug', async (req, res) => {
   }
 });
 
-// REMOVE or COMMENT OUT these lines if they exist in your server.js
-// app.use(express.static('dist'));
-// app.get('*', (req, res) => {
-//   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-// });
+/**
+ * @swagger
+ * /api/codespace/{slug}:
+ *   put:
+ *     tags: [Codespace]
+ *     summary: Update a codespace content and language
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               content:
+ *                 type: string
+ *               language:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Codespace updated successfully
+ *       500:
+ *         description: Internal server error
+ */
 
-// INSTEAD, add these handlers
-// Handle 404 for API routes
+// Add these lines BEFORE the catch-all routes (around line 281)
+app.use('/swag', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
+
+// Root route to redirect to Swagger
+app.get('/', (req, res) => {
+  res.redirect('/api-docs');
+});
+
+// Then the catch-all routes should come after
 app.use('/api/*', (req, res) => {
   res.status(404).json({ message: 'API endpoint not found' });
 });
@@ -313,3 +470,108 @@ app.get('/api/codespace/:slug', async (req, res) => {
     });
   }
 });
+
+/**
+ * @swagger
+ * tags:
+ *   name: Users
+ *   description: User management endpoints
+ * 
+ * /api/users/count:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get total number of users
+ *     responses:
+ *       200:
+ *         description: Returns the total count of users
+ * 
+ * /api/users/current:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get current user details
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current user details retrieved successfully
+ * 
+ * /api/users/default-codespace:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get user's default codespace
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Default codespace retrieved successfully
+ */
+
+/**
+ * @swagger
+ * /api/codespace:
+ *   post:
+ *     tags: [Codespace]
+ *     summary: Create a new codespace or get existing one
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - slug
+ *             properties:
+ *               slug:
+ *                 type: string
+ *               content:
+ *                 type: string
+ *               language:
+ *                 type: string
+ *                 default: javascript
+ *     responses:
+ *       200:
+ *         description: Codespace created or existing one returned
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     message:
+ *                       type: string
+ *                     slug:
+ *                       type: string
+ *                 - type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     slug:
+ *                       type: string
+ *                     content:
+ *                       type: string
+ *                     language:
+ *                       type: string
+ *       500:
+ *         description: Internal server error
+ */
+
+/**
+ * @swagger
+ * /api/users/count:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get total number of registered users
+ *     responses:
+ *       200:
+ *         description: Returns the total count of users
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 count:
+ *                   type: integer
+ *                   example: 42
+ *       500:
+ *         description: Server error
+ */

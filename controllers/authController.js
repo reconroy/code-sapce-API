@@ -5,15 +5,25 @@ const jwt = require("jsonwebtoken");
 const pool = require("../config/database");
 const emailService = require("../services/emailService");
 
-const signToken = (userId) => {
-  const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN // This will now use 10m from env
-  });
+const getTokenExpiration = () => {
+  return process.env.NO_TOKEN_EXPIRY === 'true' 
+    ? undefined 
+    : process.env.JWT_EXPIRES_IN;
+};
 
-  // Calculate expiry time in milliseconds for frontend
-  const expiresIn = parseDuration(process.env.JWT_EXPIRES_IN);
-  
-  return { token, expiresIn };
+const signToken = (userId) => {
+  const expiresIn = getTokenExpiration();
+  const token = jwt.sign(
+    { id: userId }, 
+    process.env.JWT_SECRET,
+    // Only include expiresIn if it's defined
+    expiresIn ? { expiresIn } : {}
+  );
+
+  return {
+    token,
+    expiresIn: expiresIn || 'never'  // Send 'never' to frontend when no expiry
+  };
 };
 
 // Helper function to parse duration strings
@@ -540,7 +550,10 @@ exports.verifyToken = async (req, res) => {
       return res.json({ valid: false });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Verify token without checking expiration if NO_TOKEN_EXPIRY is true
+    const decoded = process.env.NO_TOKEN_EXPIRY === 'true'
+      ? jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true })
+      : jwt.verify(token, process.env.JWT_SECRET);
 
     // Check if user still exists
     const [users] = await pool.query("SELECT id FROM users WHERE id = ?", [
