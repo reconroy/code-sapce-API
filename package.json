@@ -22,7 +22,9 @@
     "mysql2": "^3.11.3",
     "nodemailer": "^6.9.15",
     "sequelize": "^6.37.5",
-    "socket.io": "^4.7.2"
+    "socket.io": "^4.7.2",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
