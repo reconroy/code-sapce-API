@@ -369,7 +369,7 @@ app.put('/api/codespace/:slug', async (req, res) => {
  */
 
 // Add these lines BEFORE the catch-all routes (around line 281)
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
+app.use('/swag', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
 
 // Root route to redirect to Swagger
 app.get('/', (req, res) => {
