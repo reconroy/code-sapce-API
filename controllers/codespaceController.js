@@ -313,12 +313,10 @@ exports.updateCodespaceSettings = async (req, res) => {
     const { newSlug, accessType, passkey, isArchived } = req.body;
     const userId = req.user.id;
 
-    console.log('Updating codespace:', { slug, newSlug, accessType, isArchived }); // Debug log
-
-    // First get the existing codespace
+    // First get the specific codespace
     const [codespaces] = await pool.query(
-      'SELECT id, owner_id, is_default FROM codespaces WHERE slug = ?',
-      [slug]
+      'SELECT id, owner_id, is_default FROM codespaces WHERE slug = ? AND owner_id = ?',
+      [slug, userId]
     );
 
     if (codespaces.length === 0) {
@@ -330,30 +328,7 @@ exports.updateCodespaceSettings = async (req, res) => {
 
     const codespace = codespaces[0];
 
-    // Check ownership
-    if (codespace.owner_id !== userId) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'You do not have permission to modify this codespace'
-      });
-    }
-
-    // If changing slug, check availability
-    if (newSlug && newSlug !== slug) {
-      const [existing] = await pool.query(
-        'SELECT id FROM codespaces WHERE slug = ? AND id != ?',
-        [newSlug, codespace.id]
-      );
-
-      if (existing.length > 0) {
-        return res.status(400).json({
-          status: 'fail',
-          message: 'This name is already taken'
-        });
-      }
-    }
-
-    // Update the existing codespace
+    // Update only this specific codespace
     const updateQuery = `
       UPDATE codespaces 
       SET 
@@ -362,7 +337,7 @@ exports.updateCodespaceSettings = async (req, res) => {
         passkey = ?,
         is_archived = ?,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
+      WHERE id = ? AND owner_id = ?
     `;
 
     const updateValues = [
@@ -370,21 +345,29 @@ exports.updateCodespaceSettings = async (req, res) => {
       accessType,
       passkey || null,
       isArchived || false,
-      codespace.id
+      codespace.id,
+      userId
     ];
 
-    await pool.query(updateQuery, updateValues);
+    const [result] = await pool.query(updateQuery, updateValues);
 
-    // Get the io instance
-    const io = req.app.get('io');
-    
-    if (io) {
-      // Emit websocket event
-      io.to(`user_${userId}`).emit('codespaceSettingsChanged', {
+    if (result.affectedRows === 0) {
+      throw new Error('Failed to update codespace');
+    }
+
+    // Fetch the updated codespace to verify changes
+    const [updatedCodespace] = await pool.query(
+      'SELECT * FROM codespaces WHERE id = ? AND owner_id = ?',
+      [codespace.id, userId]
+    );
+
+    // Emit socket event with the specific codespace data
+    if (req.app.get('io')) {
+      req.app.get('io').to(`user_${userId}`).emit('codespaceSettingsChanged', {
         id: codespace.id,
         slug: newSlug || slug,
-        accessType,
-        isArchived,
+        access_type: accessType,
+        is_archived: isArchived || false,
         hasPasskey: !!passkey
       });
     }
@@ -392,12 +375,7 @@ exports.updateCodespaceSettings = async (req, res) => {
     res.json({
       status: 'success',
       message: 'Codespace settings updated successfully',
-      data: {
-        newSlug: newSlug || slug,
-        accessType,
-        isArchived,
-        hasPasskey: !!passkey
-      }
+      data: updatedCodespace[0]
     });
 
   } catch (error) {
